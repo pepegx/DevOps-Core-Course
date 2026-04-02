@@ -1,0 +1,137 @@
+name: Ansible Deploy Python App
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - lab06
+    paths:
+      - "ansible/playbooks/provision.yml"
+      - "ansible/playbooks/deploy.yml"
+      - "ansible/vars/app_python.yml"
+      - "ansible/playbooks/deploy_python.yml"
+      - "ansible/roles/common/**"
+      - "ansible/roles/web_app/**"
+      - "ansible/roles/docker/**"
+      - "ansible/collections/requirements.yml"
+      - "ansible/ansible.cfg"
+      - "ansible/group_vars/**"
+      - ".github/workflows/ansible-deploy.yml"
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - "ansible/playbooks/provision.yml"
+      - "ansible/playbooks/deploy.yml"
+      - "ansible/vars/app_python.yml"
+      - "ansible/playbooks/deploy_python.yml"
+      - "ansible/roles/common/**"
+      - "ansible/roles/web_app/**"
+      - "ansible/roles/docker/**"
+      - "ansible/collections/requirements.yml"
+      - "ansible/ansible.cfg"
+      - "ansible/group_vars/**"
+      - ".github/workflows/ansible-deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ansible-deploy-python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Ansible Lint (Python app)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Ansible tooling
+        run: |
+          python3 --version
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ansible ansible-lint
+
+      - name: Install required Ansible collections
+        run: ansible-galaxy collection install -r ansible/collections/requirements.yml
+
+      - name: Run ansible-lint
+        run: |
+          cd ansible
+          LINT_TARGETS="playbooks/provision.yml playbooks/deploy.yml playbooks/deploy_python.yml roles/common roles/docker roles/web_app"
+          if [ -f .ansible-lint ]; then
+            ansible-lint -c .ansible-lint ${LINT_TARGETS}
+          else
+            ansible-lint ${LINT_TARGETS}
+          fi
+
+  deploy:
+    name: Deploy Python app
+    runs-on: [self-hosted, macOS, ARM64]
+    needs: lint
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Use preinstalled Ansible tooling
+        run: |
+          command -v ansible
+          command -v ansible-playbook
+          command -v ansible-galaxy
+          ansible --version
+
+      - name: Install required Ansible collections
+        run: ansible-galaxy collection install -r ansible/collections/requirements.yml
+
+      - name: Ensure local lab containers are running
+        run: |
+          docker rm -f lab05-registry >/dev/null 2>&1 || true
+          docker run -d --name lab05-registry -p 5001:5000 registry:2
+          docker start lab05-ubuntu2404 >/dev/null || true
+          test "$(docker inspect -f '{{.State.Running}}' lab05-ubuntu2404)" = "true"
+          test "$(docker inspect -f '{{.State.Running}}' lab05-registry)" = "true"
+
+      - name: Build and publish Python image to local registry
+        env:
+          PYTHON_APP_IMAGE_TAG: ${{ vars.PYTHON_APP_IMAGE_TAG || 'latest' }}
+        run: |
+          docker build -t "localhost:5001/devops-info-service:${PYTHON_APP_IMAGE_TAG}" app_python
+          docker push "localhost:5001/devops-info-service:${PYTHON_APP_IMAGE_TAG}"
+
+      - name: Prepare vault password file
+        env:
+          ANSIBLE_VAULT_PASSWORD: ${{ secrets.ANSIBLE_VAULT_PASSWORD }}
+        run: |
+          if [ -n "${ANSIBLE_VAULT_PASSWORD:-}" ]; then
+            printf '%s\n' "$ANSIBLE_VAULT_PASSWORD" > /tmp/vault_pass
+          elif [ -f "$HOME/.ansible_vault_pass_lab06" ]; then
+            cp "$HOME/.ansible_vault_pass_lab06" /tmp/vault_pass
+          else
+            echo "Vault password missing. Set secret ANSIBLE_VAULT_PASSWORD or create $HOME/.ansible_vault_pass_lab06 on the runner host." >&2
+            exit 1
+          fi
+          chmod 600 /tmp/vault_pass
+      - name: Run deployment playbook
+        env:
+          PYTHON_APP_IMAGE_TAG: ${{ vars.PYTHON_APP_IMAGE_TAG || 'latest' }}
+        run: |
+          set -euo pipefail
+          cleanup_vault_pass() { rm -f /tmp/vault_pass; }
+          trap cleanup_vault_pass EXIT
+          cd ansible
+          ansible-playbook -i inventory/hosts.local-docker.ini playbooks/deploy_python.yml \
+            --vault-password-file /tmp/vault_pass \
+            -e @vars/local_multiapp_test.yml \
+            -e "docker_tag=${PYTHON_APP_IMAGE_TAG}" \
+            -e "web_app_pull_policy=missing"
+
+      - name: Verify Python app endpoints
+        env:
+          PYTHON_APP_PORT: ${{ vars.PYTHON_APP_PORT || '8000' }}
+        run: |
+          sleep 10
+          docker exec lab05-ubuntu2404 curl -fsS "http://127.0.0.1:${PYTHON_APP_PORT}/"
+          docker exec lab05-ubuntu2404 curl -fsS "http://127.0.0.1:${PYTHON_APP_PORT}/health"
