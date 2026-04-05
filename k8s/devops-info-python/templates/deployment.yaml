@@ -1,0 +1,68 @@
+{{- include "devops-info-python.validateValues" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  minReadySeconds: {{ .Values.minReadySeconds }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- toYaml .Values.strategy | nindent 4 }}
+  template:
+    metadata:
+      labels:
+        {{- include "common.labels" . | nindent 8 }}
+      {{- $hasSecretChecksum := and .Values.secret.create (not .Values.secret.existingSecret) }}
+      {{- $hasVaultAnnotations := .Values.vault.enabled }}
+      {{- $hasPodAnnotations := gt (len .Values.podAnnotations) 0 }}
+      {{- if or $hasSecretChecksum (or $hasVaultAnnotations $hasPodAnnotations) }}
+      annotations:
+        {{- if $hasSecretChecksum }}
+        checksum/secret: {{ printf "%s:%s:%s" (include "devops-info-python.secretName" .) .Values.secret.username .Values.secret.password | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $hasVaultAnnotations }}
+        {{- include "devops-info-python.vaultAnnotations" . | nindent 8 }}
+        {{- end }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "devops-info-python.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ include "common.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+          env:
+            {{- include "devops-info-python.commonEnvVars" . | nindent 12 }}
+            - name: APP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-info-python.secretName" . }}
+                  key: username
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-info-python.secretName" . }}
+                  key: password
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            {{- include "common.httpProbe" .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- include "common.httpProbe" .Values.readinessProbe | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
