@@ -1,0 +1,29 @@
+replicaCount: 2
+
+app:
+  environment: prod
+
+persistence:
+  # Lab 12 uses a single-writer file-backed counter on an RWO PVC.
+  # For the multi-replica prod profile in Lab 13, disable persistence to avoid PVC multi-attach failures.
+  enabled: false
+
+resources:
+  requests:
+    cpu: 150m
+    memory: 192Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+  nodePort: null
+
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 5
+
+readinessProbe:
+  initialDelaySeconds: 10
+  periodSeconds: 5
