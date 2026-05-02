@@ -1,0 +1,8 @@
+---
+- name: Restart Web Application Stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ compose_project_dir }}"
+    files:
+      - "{{ docker_compose_filename }}"
+    state: present
+    recreate: always

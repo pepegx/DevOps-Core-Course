@@ -1,0 +1,179 @@
+# Lab 15: run multiple replicas to demonstrate stable pod identity in StatefulSet.
+replicaCount: 3
+
+nameOverride: ""
+fullnameOverride: ""
+
+commonLabels:
+  app.kubernetes.io/component: web
+  app.kubernetes.io/part-of: lab12
+
+image:
+  repository: pepegx/devops-info-service
+  tag: lab12
+  pullPolicy: IfNotPresent
+
+app:
+  name: devops-info-service
+  environment: dev
+  configMountPath: /config
+  configFileName: config.json
+  dataMountPath: /data
+  visitsFileName: visits
+
+config:
+  host: 0.0.0.0
+  port: 3000
+  logLevel: INFO
+
+featureFlags:
+  visitsEndpoint: true
+  metricsEndpoint: true
+  configHotReload: true
+
+podAnnotations: {}
+
+secret:
+  create: true
+  existingSecret: ""
+  name: ""
+  type: Opaque
+  username: change-me
+  password: change-me
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+  automountServiceAccountToken: false
+
+vault:
+  enabled: false
+  authPath: auth/kubernetes
+  role: devops-info-python
+  secretPath: secret/data/devops-info-python/config
+  secretVolumePath: /vault/secrets
+  fileName: app.env
+  filePermissions: "0400"
+  agentInjectCommand: ""
+  templateStaticSecretRenderInterval: 1m
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  size: 100Mi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+statefulset:
+  enabled: true
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+
+containerPort: 3000
+revisionHistoryLimit: 5
+minReadySeconds: 5
+terminationGracePeriodSeconds: 30
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+rollout:
+  enabled: false
+  strategy: canary
+  canary:
+    maxSurge: 1
+    maxUnavailable: 0
+  blueGreen:
+    autoPromotionEnabled: false
+    previewReplicaCount: 1
+    scaleDownDelaySeconds: 30
+
+previewService:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  targetPort: http
+
+analysis:
+  enabled: false
+  templateName: ""
+  metricName: health-check
+  interval: 10s
+  count: 3
+  failureLimit: 1
+  timeoutSeconds: 5
+  jsonPath: "{$.status}"
+  successCondition: "result == 'healthy'"
+
+service:
+  type: NodePort
+  port: 80
+  targetPort: http
+  nodePort: 30080
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 250m
+    memory: 256Mi
+
+livenessProbe:
+  path: /health
+  port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  path: /health
+  port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+podSecurityContext:
+  fsGroup: 101
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 100
+  runAsGroup: 101
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+hooks:
+  preInstall:
+    enabled: true
+    image:
+      repository: busybox
+      tag: "1.36.1"
+      pullPolicy: IfNotPresent
+    sleepSeconds: 5
+    backoffLimit: 0
+  postInstall:
+    enabled: true
+    image:
+      repository: busybox
+      tag: "1.36.1"
+      pullPolicy: IfNotPresent
+    retries: 24
+    intervalSeconds: 5
+    sleepSeconds: 5
+    backoffLimit: 0
