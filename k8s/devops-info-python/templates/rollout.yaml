@@ -1,0 +1,133 @@
+{{- if .Values.rollout.enabled }}
+{{- include "devops-info-python.validateValues" . -}}
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: {{ include "common.fullname" . }}
+  labels:
+    {{- include "common.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  minReadySeconds: {{ .Values.minReadySeconds }}
+  selector:
+    matchLabels:
+      {{- include "common.selectorLabels" . | nindent 6 }}
+  strategy:
+    {{- if eq .Values.rollout.strategy "canary" }}
+    canary:
+      maxSurge: {{ .Values.rollout.canary.maxSurge | quote }}
+      maxUnavailable: {{ .Values.rollout.canary.maxUnavailable | quote }}
+      steps:
+        - setWeight: 20
+        - pause: {}
+        {{- if .Values.analysis.enabled }}
+        - analysis:
+            templates:
+              - templateName: {{ include "devops-info-python.analysisTemplateName" . }}
+            args:
+              - name: service-url
+                value: {{ printf "http://%s.%s.svc.cluster.local%s" (include "common.fullname" .) .Release.Namespace .Values.readinessProbe.path | quote }}
+        {{- end }}
+        - setWeight: 40
+        - pause:
+            duration: 30s
+        - setWeight: 60
+        - pause:
+            duration: 30s
+        - setWeight: 80
+        - pause:
+            duration: 30s
+        - setWeight: 100
+    {{- else if eq .Values.rollout.strategy "blueGreen" }}
+    blueGreen:
+      activeService: {{ include "common.fullname" . }}
+      previewService: {{ include "devops-info-python.previewServiceName" . }}
+      autoPromotionEnabled: {{ .Values.rollout.blueGreen.autoPromotionEnabled }}
+      {{- with .Values.rollout.blueGreen.previewReplicaCount }}
+      previewReplicaCount: {{ . }}
+      {{- end }}
+      scaleDownDelaySeconds: {{ .Values.rollout.blueGreen.scaleDownDelaySeconds }}
+      {{- if .Values.analysis.enabled }}
+      prePromotionAnalysis:
+        templates:
+          - templateName: {{ include "devops-info-python.analysisTemplateName" . }}
+        args:
+          - name: service-url
+            value: {{ printf "http://%s.%s.svc.cluster.local%s" (include "devops-info-python.previewServiceName" .) .Release.Namespace .Values.readinessProbe.path | quote }}
+      {{- end }}
+    {{- else }}
+    {{- fail "rollout.strategy must be either canary or blueGreen" }}
+    {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "common.labels" . | nindent 8 }}
+      {{- $hasSecretChecksum := and .Values.secret.create (not .Values.secret.existingSecret) }}
+      {{- $hasVaultAnnotations := .Values.vault.enabled }}
+      {{- $hasPodAnnotations := gt (len .Values.podAnnotations) 0 }}
+      annotations:
+        checksum/config-file: {{ include "devops-info-python.renderedConfigFile" . | sha256sum }}
+        checksum/config-env: {{ dict "appName" .Values.app.name "environment" .Values.app.environment "appMessage" (printf "Lab 12 release %s in %s" .Release.Name .Values.app.environment) "host" .Values.config.host "port" .Values.config.port "logLevel" .Values.config.logLevel "configFilePath" (include "devops-info-python.configFilePath" .) "visitsFilePath" (include "devops-info-python.visitsFilePath" .) "featureFlags" .Values.featureFlags | toJson | sha256sum }}
+        {{- if $hasSecretChecksum }}
+        checksum/secret: {{ printf "%s:%s:%s" (include "devops-info-python.secretName" .) .Values.secret.username .Values.secret.password | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $hasVaultAnnotations }}
+        {{- include "devops-info-python.vaultAnnotations" . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "devops-info-python.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ include "common.name" . }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.containerPort }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "devops-info-python.envConfigMapName" . }}
+          env:
+            - name: APP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-info-python.secretName" . }}
+                  key: username
+            - name: APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devops-info-python.secretName" . }}
+                  key: password
+          volumeMounts:
+            - name: config-volume
+              mountPath: {{ .Values.app.configMountPath }}
+              readOnly: true
+            - name: data-volume
+              mountPath: {{ .Values.app.dataMountPath }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          livenessProbe:
+            {{- include "common.httpProbe" .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- include "common.httpProbe" .Values.readinessProbe | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "devops-info-python.configMapName" . }}
+        - name: data-volume
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "devops-info-python.persistenceClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+{{- end }}

@@ -1,0 +1,42 @@
+---
+# Copy values into `group_vars/all.yml` and encrypt that file with Ansible Vault:
+#   ansible-vault encrypt group_vars/all.yml
+
+# Docker Hub credentials (use access token, not account password)
+dockerhub_username: your-dockerhub-username
+dockerhub_password: your-dockerhub-access-token
+
+# Application configuration
+app_name: devops-info-service
+docker_image: "{{ dockerhub_username }}/{{ app_name }}"
+docker_tag: latest
+
+# Host port on VM (Lab 4 SG already allows 5000)
+app_port: 5000
+
+# Internal container port.
+app_internal_port: 5000
+
+# Compose deployment directory on host.
+docker_compose_version: "3.8"
+compose_project_dir: "/opt/{{ app_name }}"
+# Use "always" with mutable tags like latest to avoid stale deploys.
+# If you pin immutable image tags, "missing" is also acceptable.
+web_app_pull_policy: always
+
+app_env:
+  HOST: "0.0.0.0"
+  PORT: "{{ app_internal_port | string }}"
+  DEBUG: "false"
+
+# Safety flag for wipe logic (Lab 6 Task 3).
+web_app_wipe: false
+
+# Monitoring stack (Lab 7 bonus role)
+monitoring_grafana_admin_user: admin
+monitoring_grafana_admin_password: change-me-now
+monitoring_grafana_anonymous_enabled: false
+monitoring_python_app_image: "{{ dockerhub_username }}/devops-info-service"
+monitoring_python_app_tag: latest
+monitoring_bonus_app_image: "{{ dockerhub_username }}/devops-info-service-go"
+monitoring_bonus_app_tag: latest
