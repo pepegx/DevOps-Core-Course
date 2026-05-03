@@ -1,0 +1,38 @@
+1. Check core resources:
+   kubectl get po,svc,pvc -n {{ .Release.Namespace }}
+{{- if .Values.statefulset.enabled }}
+   kubectl get sts -n {{ .Release.Namespace }}
+{{- end }}
+{{- if .Values.rollout.enabled }}
+   kubectl get rollouts,analysisruns,analysistemplates -n {{ .Release.Namespace }}
+{{- end }}
+
+2. Verify endpoints:
+   kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "common.fullname" . }} 8080:{{ .Values.service.port }}
+   curl http://127.0.0.1:8080/health
+
+{{- if and (not .Values.rollout.enabled) .Values.statefulset.enabled }}
+3. Verify StatefulSet DNS identity:
+   kubectl exec -n {{ .Release.Namespace }} {{ include "common.fullname" . }}-0 -- nslookup {{ include "common.fullname" . }}-1.{{ include "common.fullname" . }}-headless
+
+4. Verify per-pod storage isolation:
+   kubectl port-forward -n {{ .Release.Namespace }} pod/{{ include "common.fullname" . }}-0 8081:{{ .Values.containerPort }}
+   kubectl port-forward -n {{ .Release.Namespace }} pod/{{ include "common.fullname" . }}-1 8082:{{ .Values.containerPort }}
+   curl http://127.0.0.1:8081/visits
+   curl http://127.0.0.1:8082/visits
+
+5. Verify persistence after pod recreation:
+   kubectl exec -n {{ .Release.Namespace }} {{ include "common.fullname" . }}-0 -- cat {{ include "devops-info-python.visitsFilePath" . }}
+   kubectl delete pod -n {{ .Release.Namespace }} {{ include "common.fullname" . }}-0
+   kubectl rollout status statefulset/{{ include "common.fullname" . }} -n {{ .Release.Namespace }} --timeout=180s
+   kubectl exec -n {{ .Release.Namespace }} {{ include "common.fullname" . }}-0 -- cat {{ include "devops-info-python.visitsFilePath" . }}
+{{- end }}
+{{- if and (not .Values.rollout.enabled) (not .Values.statefulset.enabled) }}
+3. Verify Deployment workload:
+   kubectl rollout status deployment/{{ include "common.fullname" . }} -n {{ .Release.Namespace }} --timeout=180s
+{{- end }}
+{{- if .Values.rollout.enabled }}
+3. Watch and control Argo Rollout:
+   kubectl argo rollouts get rollout {{ include "common.fullname" . }} -n {{ .Release.Namespace }} -w
+   kubectl argo rollouts promote {{ include "common.fullname" . }} -n {{ .Release.Namespace }}
+{{- end }}
